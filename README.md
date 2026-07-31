@@ -110,7 +110,7 @@ modern-data-warehouse-snowflake/
 
 * [x] Create GitHub repository
 * [x] Prepare project documentation
-* [ ] Create folder structure
+* [x] Create folder structure
 
 ## Phase 2  Snowflake
 
@@ -150,7 +150,7 @@ modern-data-warehouse-snowflake/
 **Work in Progress**
 **This project is actively under development.**
 
-The repository will evolve step by step as new components are implemented. Every major milestone will be documented and version-controlled to reflect a realistic software development workflow.
+The repository will evolve step by step as new components are implemented. Every major milestone will be documented and version controlled to reflect a realistic software development workflow.
 
 ---
 
