@@ -1,0 +1,67 @@
+Airflow DAG orchestrating ingestion, dbt run, dbt test, dbt docs
+
+"""
+dwh_elt_pipeline_dag.py
+
+Orchestrates the full ELT pipeline:
+
+    load_raw_data  >>  dbt_run  >>  dbt_test  >>  dbt_docs_generate
+
+If dbt_test fails, the DAG stops there — downstream consumers never
+see a run that hasn't passed data quality checks.
+"""
+
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.operators.python import PythonOperator
+
+DBT_PROJECT_DIR = "/opt/airflow/dbt_project"
+INGESTION_SCRIPT_DIR = "/opt/airflow/ingestion"
+
+default_args = {
+    "owner": "data-engineering",
+    "retries": 2,
+    "retry_delay": timedelta(minutes=5),
+    "email_on_failure": False,
+}
+
+with DAG(
+    dag_id="dwh_elt_pipeline",
+    description="Raw ingestion -> dbt staging -> dbt marts -> tests -> docs",
+    default_args=default_args,
+    schedule_interval="0 5 * * *",   # daily at 05:00
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    tags=["dwh", "snowflake", "dbt"],
+) as dag:
+
+    def _run_ingestion():
+        import subprocess
+        subprocess.run(
+            ["python", f"{INGESTION_SCRIPT_DIR}/load_raw_to_snowflake.py"],
+            check=True,
+        )
+
+    load_raw_data = PythonOperator(
+        task_id="load_raw_data",
+        python_callable=_run_ingestion,
+    )
+
+    dbt_run = BashOperator(
+        task_id="dbt_run",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --target prod",
+    )
+
+    dbt_test = BashOperator(
+        task_id="dbt_test",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt test --target prod",
+    )
+
+    dbt_docs_generate = BashOperator(
+        task_id="dbt_docs_generate",
+        bash_command=f"cd {DBT_PROJECT_DIR} && dbt docs generate --target prod",
+    )
+
+    load_raw_data >> dbt_run >> dbt_test >> dbt_docs_generate
