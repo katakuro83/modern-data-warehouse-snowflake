@@ -1,0 +1,56 @@
+# Architecture Deep Dive
+
+## Design Goals
+
+1. **Separation of concerns** raw data is never transformed in place; every transformation step produces a new, versioned model.
+2. **Idempotency** re-running ingestion or dbt models produces the same result, so pipelines are safe to retry.
+3. **Testability** every model has explicit contracts (schema tests) so bad data is caught before it reaches consumers.
+4. **Cost control** staging models are Snowflake **views** (no storage/compute until queried); only mart-layer models materialize as **tables**.
+
+## Layer-by-Layer
+
+### 1. Raw Layer (`RAW` schema)
+Data lands exactly as received no renaming, no type casting, no filtering. This preserves an audit trail and lets you reprocess history if a downstream bug is found.
+
+Loaded via Snowflake's internal stage + `COPY INTO`, orchestrated by `ingestion/load_raw_to_snowflake.py`. In production this would typically be replaced by:
+- **Snowpipe** for continuous file-based ingestion, or
+- **Fivetran / Airbyte** for managed connector-based ingestion, or
+- **CDC** (e.g., Debezium → Kafka → Snowflake) for low-latency replication from operational databases
+
+### 2. Staging Layer (`dbt` — `stg_*` models)
+One staging model per raw source, materialized as a **view**. Responsibilities:
+- Rename columns to consistent naming conventions
+- Cast to correct data types
+- Light standardization (trim strings, uppercase codes)
+- **No business logic, no joins** staging models stay 1:1 with their source
+
+### 3. Marts Layer (`dbt` — dimensional models)
+Materialized as **tables**, built using the **Kimball dimensional modeling** approach:
+- **Fact tables** (`fct_orders`) hold measures and foreign keys, grain defined explicitly
+- **Dimension tables** (`dim_customers`, `dim_products`, `dim_date`) hold descriptive attributes
+- Surrogate keys are generated with `dbt_utils.generate_surrogate_key` to decouple the warehouse from source-system primary keys
+
+### 4. Orchestration (Airflow)
+The DAG in `airflow/dags/dwh_elt_pipeline_dag.py` sequences:
+
+```
+load_raw_data >> dbt_run >> dbt_test >> dbt_docs_generate
+```
+
+Each step fails fast — if `dbt_test` fails, the pipeline stops and the analytics schema is not refreshed with bad data (models still land in a build schema until tests pass, in a production-hardened version using blue/green schema swapping).
+
+### 5. Testing Strategy
+
+| Test type | Example | Where |
+|---|---|---|
+| `not_null` | `order_id` must never be null | `_marts__models.yml` |
+| `unique` | `customer_id` unique in `dim_customers` | `_marts__models.yml` |
+| `relationships` | every `fct_orders.customer_id` exists in `dim_customers` | `_marts__models.yml` |
+| `accepted_values` | `order_status` in `('placed','shipped','delivered','cancelled')` | `_staging__models.yml` |
+| Custom singular test | `line_amount` must be `>= 0` | `tests/assert_positive_order_amount.sql` |
+
+## Why This Design
+
+- **dbt for transformation** rather than stored procedures: version-controlled SQL, built-in testing, auto-generated documentation and lineage graphs, and a compile step that catches errors before execution.
+- **Star schema over normalized (3NF) in the marts layer**: BI tools and analysts query star schemas far more efficiently and intuitively than normalized models; normalization is preserved upstream in staging where needed.
+- **Airflow for orchestration** rather than dbt Cloud's scheduler alone: gives full control over dependencies across *non-dbt* steps too (ingestion, notifications, downstream triggers), which is typical in real enterprise stacks.
