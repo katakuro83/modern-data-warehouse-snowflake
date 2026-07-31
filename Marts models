@@ -1,0 +1,167 @@
+with customers as (
+
+    select * from {{ ref('stg_customers') }}
+
+),
+
+final as (
+
+    select
+        {{ dbt_utils.generate_surrogate_key(['customer_id']) }} as customer_key,
+        customer_id,
+        full_name,
+        email,
+        country,
+        signup_date
+
+    from customers
+
+)
+
+select * from final
+
+with products as (
+
+    select * from {{ ref('stg_products') }}
+
+),
+
+final as (
+
+    select
+        {{ dbt_utils.generate_surrogate_key(['product_id']) }} as product_key,
+        product_id,
+        product_name,
+        category,
+        unit_price,
+        is_active
+
+    from products
+
+)
+
+with date_spine as (
+
+    {{ dbt_utils.date_spine(
+        datepart="day",
+        start_date="cast('2023-01-01' as date)",
+        end_date="cast('2025-12-31' as date)"
+    ) }}
+
+),
+
+final as (
+
+    select
+        date_day                                as date_key,
+        date_day,
+        extract(year from date_day)              as year,
+        extract(month from date_day)             as month,
+        extract(day from date_day)                as day,
+        extract(dayofweek from date_day)          as day_of_week,
+        to_char(date_day, 'Day')                  as day_name,
+        to_char(date_day, 'Month')                as month_name,
+        extract(quarter from date_day)             as quarter,
+        case when extract(dayofweek from date_day) in (0, 6)
+             then true else false end             as is_weekend
+
+    from date_spine
+
+)
+
+select * from final
+
+with orders as (
+
+    select * from {{ ref('stg_orders') }}
+
+),
+
+products as (
+
+    select * from {{ ref('stg_products') }}
+
+),
+
+final as (
+
+    select
+        {{ dbt_utils.generate_surrogate_key(['orders.order_id']) }} as order_key,
+        orders.order_id,
+        {{ dbt_utils.generate_surrogate_key(['orders.customer_id']) }} as customer_key,
+        {{ dbt_utils.generate_surrogate_key(['orders.product_id']) }}  as product_key,
+        orders.order_date                                             as date_key,
+        orders.order_status,
+        orders.quantity,
+        products.unit_price,
+        orders.quantity * products.unit_price                         as line_amount
+
+    from orders
+    left join products
+        on orders.product_id = products.product_id
+
+)
+
+select * from final
+
+version: 2
+
+models:
+  - name: dim_customers
+    description: "One row per customer. Grain = customer_id. SCD Type 1 (current state only)."
+    columns:
+      - name: customer_key
+        description: "Surrogate key, hash of the natural key."
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_products
+    description: "One row per product in the catalog."
+    columns:
+      - name: product_key
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_date
+    description: "Standard calendar dimension, one row per day, generated via dbt_utils.date_spine."
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_orders
+    description: "One row per order line item. Grain = order_id (single product per order in this model)."
+    columns:
+      - name: order_key
+        tests:
+          - unique
+          - not_null
+      - name: customer_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_customers')
+              field: customer_key
+      - name: product_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_products')
+              field: product_key
+      - name: line_amount
+        description: "quantity * unit_price. Must always be non-negative — enforced by a custom singular test."
+        tests:
+          - not_null
+
+select * from final
