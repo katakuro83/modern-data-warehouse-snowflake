@@ -1,0 +1,43 @@
+-- ============================================================
+-- One-time Snowflake environment setup for Modern DWH project
+-- Run as a role with ACCOUNTADMIN or SECURITYADMIN + SYSADMIN
+-- ============================================================
+
+-- Warehouse: small, auto-suspend to control cost
+CREATE WAREHOUSE IF NOT EXISTS DWH_WH
+  WITH WAREHOUSE_SIZE = 'XSMALL'
+  AUTO_SUSPEND = 60
+  AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE;
+
+-- Database
+CREATE DATABASE IF NOT EXISTS MODERN_DWH;
+
+-- Schemas: one per pipeline layer
+CREATE SCHEMA IF NOT EXISTS MODERN_DWH.RAW;
+CREATE SCHEMA IF NOT EXISTS MODERN_DWH.STAGING;
+CREATE SCHEMA IF NOT EXISTS MODERN_DWH.ANALYTICS;
+
+-- Dedicated role for the pipeline (least-privilege principle)
+CREATE ROLE IF NOT EXISTS DWH_LOADER;
+GRANT USAGE ON WAREHOUSE DWH_WH TO ROLE DWH_LOADER;
+GRANT USAGE ON DATABASE MODERN_DWH TO ROLE DWH_LOADER;
+GRANT ALL ON SCHEMA MODERN_DWH.RAW TO ROLE DWH_LOADER;
+GRANT ALL ON SCHEMA MODERN_DWH.STAGING TO ROLE DWH_LOADER;
+GRANT ALL ON SCHEMA MODERN_DWH.ANALYTICS TO ROLE DWH_LOADER;
+
+-- Assign the role to your user (replace with actual username)
+-- GRANT ROLE DWH_LOADER TO USER YOUR_SNOWFLAKE_USERNAME;
+
+-- File format used when loading CSVs from the internal stage
+CREATE FILE FORMAT IF NOT EXISTS MODERN_DWH.RAW.CSV_STANDARD
+  TYPE = 'CSV'
+  FIELD_DELIMITER = ','
+  SKIP_HEADER = 1
+  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+  NULL_IF = ('', 'NULL', 'null')
+  EMPTY_FIELD_AS_NULL = TRUE;
+
+-- Internal stage for landing local files before COPY INTO
+CREATE STAGE IF NOT EXISTS MODERN_DWH.RAW.RAW_STAGE
+  FILE_FORMAT = MODERN_DWH.RAW.CSV_STANDARD;
