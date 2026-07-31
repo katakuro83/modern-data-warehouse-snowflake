@@ -1,0 +1,33 @@
+-- Singular test: fails (returns rows) if any order line has a negative
+-- or null monetary amount. Generic schema tests can't express this kind
+-- of business rule, so it lives here as its own query.
+--
+-- dbt convention: a singular test PASSES when the query returns zero rows.
+
+select
+    order_key,
+    order_id,
+    line_amount
+from {{ ref('fct_orders') }}
+where line_amount < 0
+   or line_amount is null
+
+{#
+    Overrides dbt's default schema-naming behavior so that custom schemas
+    (staging, analytics) are used as-is in prod, but prefixed with the
+    target schema in dev — preventing dev runs from writing into
+    shared/prod schemas.
+#}
+
+{% macro generate_schema_name(custom_schema_name, node) -%}
+
+    {%- set default_schema = target.schema -%}
+
+    {%- if target.name == 'prod' -%}
+        {{ custom_schema_name | trim }}
+    {%- else -%}
+        {{ default_schema }}_{{ custom_schema_name | trim }}
+    {%- endif -%}
+
+{%- endmacro %}
+
