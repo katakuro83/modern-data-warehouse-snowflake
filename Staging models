@@ -1,0 +1,122 @@
+version: 2
+
+sources:
+  - name: raw
+    database: MODERN_DWH
+    schema: RAW
+    tables:
+      - name: customers
+      - name: products
+      - name: orders
+with source as (
+
+    select * from {{ source('raw', 'customers') }}
+
+),
+
+renamed as (
+
+    select
+        customer_id,
+        first_name,
+        last_name,
+        first_name || ' ' || last_name as full_name,
+        lower(trim(email))             as email,
+        country,
+        try_to_date(signup_date)       as signup_date
+
+    from source
+
+)
+
+select * from renamed
+with source as (
+
+    select * from {{ source('raw', 'products') }}
+
+),
+
+renamed as (
+
+    select
+        product_id,
+        product_name,
+        category,
+        try_to_decimal(unit_price, 10, 2) as unit_price,
+        upper(is_active) = 'TRUE'         as is_active
+
+    from source
+
+)
+
+select * from renamed
+with source as (
+
+    select * from {{ source('raw', 'orders') }}
+
+),
+
+renamed as (
+
+    select
+        order_id,
+        customer_id,
+        product_id,
+        try_to_date(order_date)      as order_date,
+        try_to_number(quantity)      as quantity,
+        lower(trim(order_status))    as order_status
+
+    from source
+
+)
+
+select * from renamed
+version: 2
+
+models:
+  - name: stg_customers
+    description: "One row per customer, cleaned and typed from the raw customers feed."
+    columns:
+      - name: customer_id
+        description: "Natural key from the source system."
+        tests:
+          - unique
+          - not_null
+      - name: email
+        tests:
+          - not_null
+
+  - name: stg_products
+    description: "One row per product in the catalog, cleaned and typed."
+    columns:
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+      - name: unit_price
+        tests:
+          - not_null
+
+  - name: stg_orders
+    description: "One row per order line item, cleaned and typed."
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+      - name: product_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_products')
+              field: product_id
+      - name: order_status
+        tests:
+          - accepted_values:
+              values: ['placed', 'shipped', 'delivered', 'cancelled']
